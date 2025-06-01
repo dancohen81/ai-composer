@@ -1,6 +1,10 @@
-# AI Composer
+# AI Composer Project
 
 This project contains the Max for Live AI Composer device, refactored into modular JavaScript files.
+
+For detailed project overview, architecture, technical learnings, and future steps, please refer to the documentation in the `docs` directory:
+
+- [AI Composer Project - Handover Documentation](docs/AI Composer Project - Handover Documentation.md)
 
 ## Project Structure
 
