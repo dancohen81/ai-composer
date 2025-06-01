@@ -1,0 +1,32 @@
+{
+  "name": "ai-composer-service",
+  "version": "1.0.0",
+  "description": "Phase-aware AI Music Composer for Ableton Live via OpenRouter",
+  "main": "ai-composer-service.js",
+  "scripts": {
+    "start": "node ai-composer-service.js",
+    "dev": "nodemon ai-composer-service.js",
+    "test": "node test-service.js"
+  },
+  "dependencies": {
+    "ws": "^8.14.2",
+    "axios": "^1.6.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  },
+  "keywords": [
+    "ai",
+    "music",
+    "ableton",
+    "composition", 
+    "openrouter",
+    "max4live"
+  ],
+  "author": "AI Music Producer",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-repo/ai-composer-service"
+  }
+}
