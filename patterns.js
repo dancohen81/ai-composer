@@ -1,76 +1,195 @@
 // Functions related to pattern generation and assignment
 
-// CORE FUNCTION: Create pattern on a specific track
+// ===== INTELLIGENTE CLIP-BEHANDLUNG =====
+// Für patterns.js - ersetze createPatternOnTrack()
+
 function createPatternOnTrack(trackName, patternType, clipLength) {
-    clipLength = clipLength || 4.0; // Default: 4 bars
+    clipLength = clipLength || 4.0;
     
     try {
         var liveSet = new LiveAPI("live_set");
-        // liveSet.get("tracks") returns an array of track IDs. Its .length property gives the count.
-        var trackCount = liveSet.get("tracks").length; 
+        var trackCount = liveSet.get("tracks").length;
+        
+        for (var i = 0; i < trackCount; i++) {
+            var track = new LiveAPI("live_set tracks " + i);
+            if (track.id != 0) {
+                var name = track.get("name");
+                if (name && name.toString().toLowerCase().indexOf(trackName.toLowerCase()) !== -1) {
+                    
+                    var clipSlot = new LiveAPI("live_set tracks " + i + " clip_slots 0");
+                    var hasClip = clipSlot.get("has_clip");
+                    
+                    if (hasClip && hasClip[0] === 1) {
+                        // Clip existiert bereits - verschiedene Optionen
+                        post("Clip already exists on track '" + name + "'");
+                        post("Options: 1) Overwrite notes, 2) Replace clip, 3) Use slot 1");
+                        
+                        // STANDARD: Notes überschreiben (einfachste Option)
+                        post("Using option 1: Overwriting notes in existing clip");
+                        var clip = new LiveAPI("live_set tracks " + i + " clip_slots 0 clip");
+                        
+                        // Alle Notes löschen
+                        try {
+                            clip.call("select_all_notes");
+                            clip.call("remove_notes");
+                            post("Cleared existing notes");
+                        } catch (e) {
+                            post("Could not clear notes: " + e.message);
+                        }
+                        
+                        // Neue Notes setzen
+                        generatePattern(clip, patternType, clipLength);
+                        clip.set("name", "AI " + patternType + " Pattern v2");
+                        
+                        post("SUCCESS: Updated existing clip with new " + patternType + " pattern");
+                        outlet(0, "pattern_" + patternType + "_updated");
+                        
+                    } else {
+                        // Kein Clip - normal erstellen
+                        clipSlot.call("create_clip", clipLength);
+                        var clip = new LiveAPI("live_set tracks " + i + " clip_slots 0 clip");
+                        generatePattern(clip, patternType, clipLength);
+                        clip.set("name", "AI " + patternType + " Pattern");
+                        
+                        post("SUCCESS: Created new " + patternType + " pattern");
+                        outlet(0, "pattern_" + patternType + "_created");
+                    }
+                    
+                    return; // Fertig
+                }
+            }
+        }
+        
+        post("ERROR: No track found containing '" + trackName + "'");
+        
+    } catch (e) {
+        post("Failed to create/update pattern: " + e.message);
+    }
+}
+
+// ALTERNATIVE: Clip explizit ersetzen
+function createPatternOnTrackReplace(trackName, patternType, clipLength) {
+    clipLength = clipLength || 4.0;
+    
+    try {
+        var liveSet = new LiveAPI("live_set");
+        var trackCount = liveSet.get("tracks").length;
         var foundTrack = false;
         
-        post("=== CREATING " + patternType.toUpperCase() + " PATTERN ===");
-        post("Looking for track containing: '" + trackName + "'");
+        post("=== REPLACING " + patternType.toUpperCase() + " PATTERN ===");
         
-        // Search for track with matching name
         for (var i = 0; i < trackCount; i++) {
             try {
                 var track = new LiveAPI("live_set tracks " + i);
-                if (track.id != 0) { // Ensure it's a valid track object
+                if (track.id != 0) {
                     var name = track.get("name");
-                    // Check if name is an array (LiveAPI often returns single values as arrays)
-                    var actualName = Array.isArray(name) ? name[0] : name;
-
-                    if (actualName && actualName.toString().toLowerCase().indexOf(trackName.toLowerCase()) !== -1) {
-                        post("FOUND target track: '" + actualName + "' at index " + i);
+                    if (name && name.toString().toLowerCase().indexOf(trackName.toLowerCase()) !== -1) {
+                        post("FOUND target track: '" + name + "' at index " + i);
                         
-                        // Create clip
                         var clipSlot = new LiveAPI("live_set tracks " + i + " clip_slots 0");
-                        clipSlot.call("create_clip", clipLength);
                         
+                        // SCHRITT 1: Bestehenden Clip löschen (falls vorhanden)
+                        try {
+                            var hasClip = clipSlot.get("has_clip");
+                            if (hasClip && hasClip[0] === 1) {
+                                post("Deleting existing clip");
+                                clipSlot.call("delete_clip");
+                            }
+                        } catch (deleteError) {
+                            post("Could not delete existing clip: " + deleteError.message);
+                        }
+                        
+                        // SCHRITT 2: Neuen Clip erstellen
+                        post("Creating new clip");
+                        clipSlot.call("create_clip", clipLength);
                         var clip = new LiveAPI("live_set tracks " + i + " clip_slots 0 clip");
                         
-                        // Generate pattern based on type
+                        // Pattern generieren
                         generatePattern(clip, patternType, clipLength);
-                        
                         clip.set("name", "AI " + patternType + " Pattern");
                         
-                        post("SUCCESS: Created " + patternType + " pattern on track '" + actualName + "'");
-                        
-                        // FIXED: Outlet 0 instead of 1
-                        outlet(0, "pattern_" + patternType + "_created");
+                        post("SUCCESS: Replaced " + patternType + " pattern on track '" + name + "'");
+                        outlet(0, "pattern_" + patternType + "_replaced");
                         foundTrack = true;
                         break;
                     }
                 }
             } catch (trackError) {
-                post("Error checking track " + i + ": " + trackError.message);
+                post("Error processing track " + i + ": " + trackError.message);
             }
         }
         
         if (!foundTrack) {
             post("ERROR: No track found containing '" + trackName + "'");
-            post("Available tracks:");
-            
-            // Debug: Show all available tracks
-            for (var j = 0; j < trackCount; j++) {
-                try {
-                    var debugTrack = new LiveAPI("live_set tracks " + j);
-                    if (debugTrack.id != 0) {
-                        var debugName = debugTrack.get("name");
-                        post("  Track " + j + ": '" + (Array.isArray(debugName) ? debugName[0] : debugName) + "'");
-                    }
-                } catch (e) {
-                    post("  Track " + j + ": [error]");
-                }
-            }
-            outlet(0, "pattern_error_no_track");
         }
         
     } catch (e) {
-        post("Failed to create pattern: " + e.message);
-        outlet(0, "pattern_error");
+        post("Failed to replace pattern: " + e.message);
+    }
+}
+
+// USER-FREUNDLICHE VERSION: Fragt den User
+function createPatternOnTrackSmart(trackName, patternType, clipLength) {
+    clipLength = clipLength || 4.0;
+    
+    try {
+        var liveSet = new LiveAPI("live_set");
+        var trackCount = liveSet.get("tracks").length;
+        
+        for (var i = 0; i < trackCount; i++) {
+            var track = new LiveAPI("live_set tracks " + i);
+            if (track.id != 0) {
+                var name = track.get("name");
+                if (name && name.toString().toLowerCase().indexOf(trackName.toLowerCase()) !== -1) {
+                    
+                    var clipSlot = new LiveAPI("live_set tracks " + i + " clip_slots 0");
+                    var hasClip = clipSlot.get("has_clip");
+                    
+                    if (hasClip && hasClip[0] === 1) {
+                        // Clip existiert bereits - verschiedene Optionen
+                        post("Clip already exists on track '" + name + "'");
+                        post("Options: 1) Overwrite notes, 2) Replace clip, 3) Use slot 1");
+                        
+                        // STANDARD: Notes überschreiben (einfachste Option)
+                        post("Using option 1: Overwriting notes in existing clip");
+                        var clip = new LiveAPI("live_set tracks " + i + " clip_slots 0 clip");
+                        
+                        // Alle Notes löschen
+                        try {
+                            clip.call("select_all_notes");
+                            clip.call("remove_notes");
+                            post("Cleared existing notes");
+                        } catch (e) {
+                            post("Could not clear notes: " + e.message);
+                        }
+                        
+                        // Neue Notes setzen
+                        generatePattern(clip, patternType, clipLength);
+                        clip.set("name", "AI " + patternType + " Pattern v2");
+                        
+                        post("SUCCESS: Updated existing clip with new " + patternType + " pattern");
+                        outlet(0, "pattern_" + patternType + "_updated");
+                        
+                    } else {
+                        // Kein Clip - normal erstellen
+                        clipSlot.call("create_clip", clipLength);
+                        var clip = new LiveAPI("live_set tracks " + i + " clip_slots 0 clip");
+                        generatePattern(clip, patternType, clipLength);
+                        clip.set("name", "AI " + patternType + " Pattern");
+                        
+                        post("SUCCESS: Created new " + patternType + " pattern");
+                        outlet(0, "pattern_" + patternType + "_created");
+                    }
+                    
+                    return; // Fertig
+                }
+            }
+        }
+        
+        post("ERROR: No track found containing '" + trackName + "'");
+        
+    } catch (e) {
+        post("Failed to create/update pattern: " + e.message);
     }
 }
 
@@ -118,7 +237,7 @@ function generateKickPattern(clip, clipLength) {
         {time: 3.5, pitch: kickNote, length: noteLength, velocity: velocity - 10}   // Lead-in
     ];
     
-    setNotesCorrectly(clip, noteList);
+    setNotesCorrectlySimple(clip, noteList);  // Statt setNotesCorrectly()
     post("Kick pattern generated: 4/4 groove with syncopation");
 }
 
@@ -140,7 +259,7 @@ function generateBassLinePattern(clip, clipLength) {
         {time: 3.25, pitch: bassNotes[3], length: 0.25, velocity: velocity - 15}        // G (short)
     ];
     
-    setNotesCorrectly(clip, noteList);
+    setNotesCorrectlySimple(clip, noteList);  // Statt setNotesCorrectly()
     post("Bassline pattern generated: C minor pentatonic groove");
 }
 
@@ -160,7 +279,7 @@ function generateMelodyPattern(clip, clipLength) {
         {time: 3.25, pitch: 65, length: 0.75, velocity: velocity}      // F4
     ];
     
-    setNotesCorrectly(clip, noteList);
+    setNotesCorrectlySimple(clip, noteList);  // Statt setNotesCorrectly()
     post("Melody pattern generated: Catchy C major lead");
 }
 
@@ -194,7 +313,7 @@ function generatePadPattern(clip, clipLength) {
         {time: 3.0, pitch: 50, length: noteLength, velocity: velocity}  // D
     ];
     
-    setNotesCorrectly(clip, noteList);
+    setNotesCorrectlySimple(clip, noteList);  // Statt setNotesCorrectly()
     post("Pad pattern generated: Cm-Ab-Bb-Gm progression");
 }
 
@@ -230,7 +349,7 @@ function generateHiHatPattern(clip, clipLength) {
         });
     }
     
-    setNotesCorrectly(clip, noteList);
+    setNotesCorrectlySimple(clip, noteList);  // Statt setNotesCorrectly()
     post("Hi-hat pattern generated: 16th note groove with accents (" + noteList.length + " notes)");
 }
 // FALLBACK: Basic Pattern
