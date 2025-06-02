@@ -118,50 +118,44 @@ function setNotesCorrectlyString(clip, noteList) {
         return;
     }
     
-    post("Setting " + noteList.length + " notes using STRING Live API syntax...");
+    post("Using legacy string API for " + noteList.length + " notes...");
     
     var messageIndex = 0;
-    var totalMessages = 3 + noteList.length; // set_notes + notes + N*note + done
+    var totalMessages = 3 + noteList.length;
     
     function sendNextMessage() {
         try {
             if (messageIndex === 0) {
-                // 1. Start Operation
-                post("Message 1/" + totalMessages + ": call set_notes");
+                post("Legacy API: call set_notes");
                 clip.call("set_notes");
                 
             } else if (messageIndex === 1) {
-                // 2. Note Count - ALS STRING!
                 var notesCommand = "notes " + noteList.length;
-                post("Message 2/" + totalMessages + ": call '" + notesCommand + "'");
+                post("Legacy API: call '" + notesCommand + "'");
                 clip.call(notesCommand);
                 
             } else if (messageIndex >= 2 && messageIndex < 2 + noteList.length) {
-                // 3. Individual Notes - ALS STRING!
                 var noteIdx = messageIndex - 2;
                 var note = noteList[noteIdx];
                 var noteCommand = "note " + note.pitch + " " + note.time + " " + note.length + " " + note.velocity + " 0";
-                post("Message " + (messageIndex + 1) + "/" + totalMessages + ": call '" + noteCommand + "'");
+                post("Legacy API: call '" + noteCommand + "'");
                 clip.call(noteCommand);
                 
             } else if (messageIndex === 2 + noteList.length) {
-                // 4. End Operation
-                post("Message " + (messageIndex + 1) + "/" + totalMessages + ": call done");
+                post("Legacy API: call done");
                 clip.call("done");
-                post("SUCCESS: All " + noteList.length + " notes set!");
-                return; // Fertig!
+                post("SUCCESS: All notes set with legacy API!");
+                return;
             }
             
             messageIndex++;
             
-            // Nächste Nachricht nach Delay
             var task = new Task(sendNextMessage);
             task.schedule(50);
             
         } catch (e) {
-            post("ERROR at message " + (messageIndex + 1) + ": " + e.message);
+            post("Legacy API error at message " + (messageIndex + 1) + ": " + e.message);
             messageIndex++;
-            
             if (messageIndex < totalMessages) {
                 var task = new Task(sendNextMessage);
                 task.schedule(50);
@@ -169,81 +163,8 @@ function setNotesCorrectlyString(clip, noteList) {
         }
     }
     
-    // Ersten Message nach kurzem Delay senden
     var initialTask = new Task(sendNextMessage);
     initialTask.schedule(100);
-}
-
-// ALTERNATIVE: Direkter Ansatz mit String-Formatierung
-function setNotesDirectString(clip, noteList) {
-    if (!noteList || noteList.length === 0) {
-        post("No notes to set");
-        return;
-    }
-    
-    post("Setting " + noteList.length + " notes using direct string approach...");
-    
-    try {
-        // 1. Start Operation
-        post("Step 1: Starting set_notes operation");
-        clip.call("set_notes");
-        
-        // Kurze Pause
-        var step2Task = new Task(function() {
-            try {
-                // 2. Note Count
-                var notesCmd = "notes " + noteList.length;
-                post("Step 2: " + notesCmd);
-                clip.call(notesCmd);
-                
-                // 3. Send Notes sequenziell
-                var noteIndex = 0;
-                function sendNote() {
-                    if (noteIndex < noteList.length) {
-                        var note = noteList[noteIndex];
-                        var noteCmd = "note " + note.pitch + " " + note.time + " " + note.length + " " + note.velocity + " 0";
-                        post("Step " + (3 + noteIndex) + ": " + noteCmd);
-                        
-                        try {
-                            clip.call(noteCmd);
-                            noteIndex++;
-                            
-                            if (noteIndex < noteList.length) {
-                                var nextNoteTask = new Task(sendNote);
-                                nextNoteTask.schedule(30);
-                            } else {
-                                // 4. End Operation
-                                var doneTask = new Task(function() {
-                                    post("Final step: done");
-                                    clip.call("done");
-                                    post("SUCCESS: All notes set with string syntax!");
-                                });
-                                doneTask.schedule(30);
-                            }
-                        } catch (noteError) {
-                            post("Error sending note: " + noteError.message);
-                            noteIndex++;
-                            if (noteIndex < noteList.length) {
-                                var retryTask = new Task(sendNote);
-                                retryTask.schedule(30);
-                            }
-                        }
-                    }
-                }
-                
-                // Start sending notes
-                var firstNoteTask = new Task(sendNote);
-                firstNoteTask.schedule(50);
-                
-            } catch (notesError) {
-                post("Error in notes command: " + notesError.message);
-            }
-        });
-        step2Task.schedule(50);
-        
-    } catch (e) {
-        post("Error starting set_notes: " + e.message);
-    }
 }
 
 // BONUS: Clip-Handling für bestehende Clips
@@ -284,64 +205,193 @@ function createOrUpdateClip(trackIndex, clipLength, patternType) {
 }
 
 // ALTERNATIVE: Einfachere Variante ohne apply()
-function setNotesCorrectlySimple(clip, noteList) {
+
+
+// ===== VOLLSTÄNDIGE LIVE 12 NOTES API =====
+// Für utils.js - komplett moderne Implementierung
+
+function setNotesLive12(clip, noteList) {
     if (!noteList || noteList.length === 0) {
         post("No notes to set");
         return;
     }
     
-    post("Setting " + noteList.length + " notes using STRING Live API syntax...");
+    post("=== LIVE 12 MODERN API ===");
+    post("Setting " + noteList.length + " notes using Live 12 native API...");
+    
+    try {
+        // SCHRITT 1: Bestehende Notes löschen (Live 12 Syntax)
+        try {
+            // Moderne Methode: remove_notes_extended
+            post("Clearing existing notes with Live 12 API...");
+            var allNotes = clip.call("get_notes_extended", 0, 0, 0, 128); // Alle Notes holen
+            if (allNotes && allNotes.notes && allNotes.notes.length > 0) {
+                clip.call("remove_notes_extended", {notes: allNotes.notes});
+                post("Cleared " + allNotes.notes.length + " existing notes");
+            } else {
+                post("No existing notes to clear");
+            }
+        } catch (clearError) {
+            post("Modern clear failed, trying legacy: " + clearError.message);
+            try {
+                clip.call("select_all_notes");
+                clip.call("remove_notes");
+            } catch (legacyClearError) {
+                post("Legacy clear also failed: " + legacyClearError.message);
+            }
+        }
+        
+        // SCHRITT 2: Notes im Live 12 Format vorbereiten
+        var notesData = {
+            notes: []
+        };
+        
+        for (var i = 0; i < noteList.length; i++) {
+            var note = noteList[i];
+            notesData.notes.push({
+                pitch: note.pitch,
+                time: note.time,
+                duration: note.length,
+                velocity: note.velocity,
+                mute: false
+            });
+        }
+        
+        post("Prepared " + notesData.notes.length + " notes in Live 12 format");
+        
+        // SCHRITT 3: Notes mit moderner API setzen
+        try {
+            post("Adding notes with add_new_notes...");
+            clip.call("add_new_notes", notesData);
+            post("SUCCESS: Notes added with Live 12 add_new_notes API!");
+            
+        } catch (addError) {
+            post("add_new_notes failed: " + addError.message);
+            post("Trying apply_note_modifications...");
+            
+            try {
+                clip.call("apply_note_modifications", notesData);
+                post("SUCCESS: Notes added with apply_note_modifications API!");
+                
+            } catch (applyError) {
+                post("apply_note_modifications failed: " + applyError.message);
+                post("Falling back to legacy set_notes...");
+                setNotesLegacy(clip, noteList);
+            }
+        }
+        
+    } catch (e) {
+        post("Live 12 API completely failed: " + e.message);
+        post("Using legacy fallback...");
+        setNotesLegacy(clip, noteList);
+    }
+}
+
+// LEGACY FALLBACK (nur wenn Live 12 API nicht funktioniert)
+function setNotesLegacy(clip, noteList) {
+    post("Using legacy API for compatibility...");
     
     var messageIndex = 0;
-    var totalMessages = 3 + noteList.length; // set_notes + notes + N*note + done
+    var totalMessages = 3 + noteList.length;
     
     function sendNextMessage() {
         try {
             if (messageIndex === 0) {
-                // 1. Start Operation
-                post("Message 1/" + totalMessages + ": call set_notes");
                 clip.call("set_notes");
-                
             } else if (messageIndex === 1) {
-                // 2. Note Count - ALS STRING!
-                var notesCommand = "notes " + noteList.length;
-                post("Message 2/" + totalMessages + ": call '" + notesCommand + "'");
-                clip.call(notesCommand);
-                
+                clip.call("notes " + noteList.length);
             } else if (messageIndex >= 2 && messageIndex < 2 + noteList.length) {
-                // 3. Individual Notes - ALS STRING!
                 var noteIdx = messageIndex - 2;
                 var note = noteList[noteIdx];
-                var noteCommand = "note " + note.pitch + " " + note.time + " " + note.length + " " + note.velocity + " 0";
-                post("Message " + (messageIndex + 1) + "/" + totalMessages + ": call '" + noteCommand + "'");
-                clip.call(noteCommand);
-                
+                clip.call("note " + note.pitch + " " + note.time + " " + note.length + " " + note.velocity + " 0");
             } else if (messageIndex === 2 + noteList.length) {
-                // 4. End Operation
-                post("Message " + (messageIndex + 1) + "/" + totalMessages + ": call done");
                 clip.call("done");
-                post("SUCCESS: All " + noteList.length + " notes set!");
-                return; // Fertig!
+                post("SUCCESS: Legacy API completed");
+                return;
             }
             
             messageIndex++;
-            
-            // Nächste Nachricht nach Delay
             var task = new Task(sendNextMessage);
-            task.schedule(50);
+            task.schedule(30);
             
         } catch (e) {
-            post("ERROR at message " + (messageIndex + 1) + ": " + e.message);
+            post("Legacy error: " + e.message);
             messageIndex++;
-            
             if (messageIndex < totalMessages) {
                 var task = new Task(sendNextMessage);
-                task.schedule(50);
+                task.schedule(30);
             }
         }
     }
     
-    // Ersten Message nach kurzem Delay senden
     var initialTask = new Task(sendNextMessage);
-    initialTask.schedule(100);
+    initialTask.schedule(50);
+}
+
+// BONUS: Erweiterte Live 12 Features
+function setNotesWithVelocityCurve(clip, noteList, velocityCurve) {
+    // Velocity Curve: "linear", "exponential", "logarithmic"
+    velocityCurve = velocityCurve || "linear";
+    
+    post("Setting notes with " + velocityCurve + " velocity curve...");
+    
+    var processedNotes = [];
+    
+    for (var i = 0; i < noteList.length; i++) {
+        var note = noteList[i];
+        var processedVelocity = note.velocity;
+        
+        // Velocity curve processing
+        if (velocityCurve === "exponential") {
+            processedVelocity = Math.round(Math.pow(note.velocity / 127, 0.5) * 127);
+        } else if (velocityCurve === "logarithmic") {
+            processedVelocity = Math.round(Math.pow(note.velocity / 127, 2) * 127);
+        }
+        
+        processedNotes.push({
+            pitch: note.pitch,
+            time: note.time,
+            duration: note.length,
+            velocity: processedVelocity,
+            mute: false
+        });
+    }
+    
+    setNotesLive12(clip, processedNotes);
+}
+
+// AI-READY: Intelligente Note-Humanisierung
+function setNotesHumanized(clip, noteList, humanization) {
+    humanization = humanization || 0.1; // 10% Humanisierung
+    
+    post("Setting humanized notes (factor: " + humanization + ")...");
+    
+    var humanizedNotes = [];
+    
+    for (var i = 0; i < noteList.length; i++) {
+        var note = noteList[i];
+        
+        // Timing humanization
+        var timeOffset = (Math.random() - 0.5) * humanization * 0.1; // ±0.01 beats max
+        var humanizedTime = Math.max(0, note.time + timeOffset);
+        
+        // Velocity humanization  
+        var velocityOffset = (Math.random() - 0.5) * humanization * 20; // ±10 velocity max
+        var humanizedVelocity = Math.max(1, Math.min(127, note.velocity + velocityOffset));
+        
+        humanizedNotes.push({
+            pitch: note.pitch,
+            time: humanizedTime,
+            duration: note.length,
+            velocity: Math.round(humanizedVelocity),
+            mute: false
+        });
+    }
+    
+    setNotesLive12(clip, humanizedNotes);
+}
+
+// MAIN FUNCTION: Ersetze setNotesCorrectlySimple() mit dieser
+function setNotesCorrectlySimple(clip, noteList) {
+    setNotesLive12(clip, noteList);
 }

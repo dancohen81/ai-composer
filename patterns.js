@@ -1,72 +1,311 @@
-// Functions related to pattern generation and assignment
+// ===== INTELLIGENTES TRACK & PATTERN MANAGEMENT =====
+// Für patterns.js - löst Multi-Track und Clip-Detection Probleme
 
-// ===== INTELLIGENTE CLIP-BEHANDLUNG =====
-// Für patterns.js - ersetze createPatternOnTrack()
+// GLOBAL: Track-Memory für AI System
+var trackMemory = {
+    lastCreatedTracks: {},  // {drums: trackIndex, bass: trackIndex, ...}
+    trackCreationOrder: [], // [trackIndex1, trackIndex2, ...]
+    tracksByType: {}        // {drums: [index1, index2], bass: [index3], ...}
+};
 
-function createPatternOnTrack(trackName, patternType, clipLength) {
+// HAUPTFUNKTION: Intelligente Track-Auswahl für Patterns
+function createPatternOnTrackSmart(trackName, patternType, clipLength) {
     clipLength = clipLength || 4.0;
     
     try {
-        var liveSet = new LiveAPI("live_set");
-        var trackCount = liveSet.get("tracks").length;
+        post("=== SMART " + patternType.toUpperCase() + " PATTERN CREATION ===");
         
-        for (var i = 0; i < trackCount; i++) {
+        // SCHRITT 1: Alle passenden Tracks finden
+        var matchingTracks = findMatchingTracks(trackName);
+        
+        if (matchingTracks.length === 0) {
+            post("ERROR: No tracks found containing '" + trackName + "'");
+            listAllTracks(); // Debug helper
+            outlet(0, "pattern_error_no_track");
+            return;
+        }
+        
+        // SCHRITT 2: Besten Track intelligent auswählen
+        var selectedTrack = selectBestTrack(matchingTracks, trackName, patternType);
+        
+        if (!selectedTrack) {
+            post("ERROR: Could not select appropriate track");
+            return;
+        }
+        
+        post("SELECTED: Track " + selectedTrack.index + " ('" + selectedTrack.name + "') - Reason: " + selectedTrack.reason);
+        
+        // SCHRITT 3: Clip intelligent behandeln
+        var clip = handleClipIntelligent(selectedTrack.index, clipLength, patternType);
+        
+        if (!clip) {
+            post("ERROR: Could not create/access clip");
+            return;
+        }
+        
+        // SCHRITT 4: Pattern generieren
+        generatePattern(clip, patternType, clipLength);
+        
+        try {
+            clip.set("name", "AI " + patternType + " v" + getPatternVersion(selectedTrack.index));
+        } catch (nameError) {
+            post("Could not set clip name: " + nameError.message);
+        }
+        
+        post("SUCCESS: Created " + patternType + " pattern on track '" + selectedTrack.name + "'");
+        outlet(0, "pattern_" + patternType + "_created");
+        
+    } catch (e) {
+        post("Smart pattern creation failed: " + e.message);
+        outlet(0, "pattern_error");
+    }
+}
+
+// HILFSFUNKTION: Alle passenden Tracks finden
+function findMatchingTracks(trackName) {
+    var liveSet = new LiveAPI("live_set");
+    var trackCount = liveSet.get("tracks").length;
+    var matchingTracks = [];
+    
+    post("Searching for tracks containing: '" + trackName + "'");
+    
+    for (var i = 0; i < trackCount; i++) {
+        try {
             var track = new LiveAPI("live_set tracks " + i);
             if (track.id != 0) {
                 var name = track.get("name");
                 if (name && name.toString().toLowerCase().indexOf(trackName.toLowerCase()) !== -1) {
                     
-                    var clipSlot = new LiveAPI("live_set tracks " + i + " clip_slots 0");
-                    var hasClip = clipSlot.get("has_clip");
+                    // Track-Info sammeln
+                    var trackInfo = {
+                        index: i,
+                        name: name.toString(),
+                        id: track.id,
+                        creationTime: getTrackCreationTime(i),
+                        hasClips: countClipsInTrack(i),
+                        isEmpty: isTrackEmpty(i)
+                    };
                     
-                    if (hasClip && hasClip[0] === 1) {
-                        // Clip existiert bereits - verschiedene Optionen
-                        post("Clip already exists on track '" + name + "'");
-                        post("Options: 1) Overwrite notes, 2) Replace clip, 3) Use slot 1");
-                        
-                        // STANDARD: Notes überschreiben (einfachste Option)
-                        post("Using option 1: Overwriting notes in existing clip");
-                        var clip = new LiveAPI("live_set tracks " + i + " clip_slots 0 clip");
-                        
-                        // Alle Notes löschen
-                        try {
-                            clip.call("select_all_notes");
-                            clip.call("remove_notes");
-                            post("Cleared existing notes");
-                        } catch (e) {
-                            post("Could not clear notes: " + e.message);
-                        }
-                        
-                        // Neue Notes setzen
-                        generatePattern(clip, patternType, clipLength);
-                        clip.set("name", "AI " + patternType + " Pattern v2");
-                        
-                        post("SUCCESS: Updated existing clip with new " + patternType + " pattern");
-                        outlet(0, "pattern_" + patternType + "_updated");
-                        
-                    } else {
-                        // Kein Clip - normal erstellen
-                        clipSlot.call("create_clip", clipLength);
-                        var clip = new LiveAPI("live_set tracks " + i + " clip_slots 0 clip");
-                        generatePattern(clip, patternType, clipLength);
-                        clip.set("name", "AI " + patternType + " Pattern");
-                        
-                        post("SUCCESS: Created new " + patternType + " pattern");
-                        outlet(0, "pattern_" + patternType + "_created");
-                    }
-                    
-                    return; // Fertig
+                    matchingTracks.push(trackInfo);
+                    post("Found match: Track " + i + " ('" + name + "') - Clips: " + trackInfo.hasClips + ", Empty: " + trackInfo.isEmpty);
                 }
             }
+        } catch (trackError) {
+            post("Error checking track " + i + ": " + trackError.message);
         }
-        
-        post("ERROR: No track found containing '" + trackName + "'");
-        
-    } catch (e) {
-        post("Failed to create/update pattern: " + e.message);
+    }
+    
+    post("Found " + matchingTracks.length + " matching tracks");
+    return matchingTracks;
+}
+
+// INTELLIGENTE TRACK-AUSWAHL
+function selectBestTrack(matchingTracks, trackName, patternType) {
+    if (matchingTracks.length === 1) {
+        matchingTracks[0].reason = "Only track available";
+        return matchingTracks[0];
+    }
+    
+    // PRIORITÄTS-SYSTEM für Track-Auswahl
+    
+    // 1. HÖCHSTE PRIORITÄT: Zuletzt erstellter Track dieses Typs
+    var trackType = trackName.toLowerCase();
+    if (trackMemory.lastCreatedTracks[trackType] !== undefined) {
+        var lastCreatedIndex = trackMemory.lastCreatedTracks[trackType];
+        for (var i = 0; i < matchingTracks.length; i++) {
+            if (matchingTracks[i].index === lastCreatedIndex) {
+                matchingTracks[i].reason = "Last created " + trackType + " track";
+                post("PRIORITY 1: Using last created " + trackType + " track");
+                return matchingTracks[i];
+            }
+        }
+    }
+    
+    // 2. HOHE PRIORITÄT: Leere Tracks (keine Clips)
+    var emptyTracks = matchingTracks.filter(function(t) { return t.isEmpty; });
+    if (emptyTracks.length > 0) {
+        // Neuesten leeren Track nehmen
+        var newestEmpty = emptyTracks.reduce(function(prev, current) {
+            return (current.creationTime > prev.creationTime) ? current : prev;
+        });
+        newestEmpty.reason = "Newest empty track";
+        post("PRIORITY 2: Using newest empty track");
+        return newestEmpty;
+    }
+    
+    // 3. MITTLERE PRIORITÄT: Track mit wenigsten Clips
+    var trackWithFewestClips = matchingTracks.reduce(function(prev, current) {
+        return (current.hasClips < prev.hasClips) ? current : prev;
+    });
+    
+    // 4. NIEDRIGE PRIORITÄT: Neuester Track (höchster Index)
+    var newestTrack = matchingTracks.reduce(function(prev, current) {
+        return (current.index > prev.index) ? current : prev;
+    });
+    
+    if (trackWithFewestClips.hasClips < 3) {
+        trackWithFewestClips.reason = "Fewest clips (" + trackWithFewestClips.hasClips + ")";
+        post("PRIORITY 3: Using track with fewest clips");
+        return trackWithFewestClips;
+    } else {
+        newestTrack.reason = "Newest track (highest index)";
+        post("PRIORITY 4: Using newest track");
+        return newestTrack;
     }
 }
 
+// INTELLIGENTE CLIP-BEHANDLUNG
+function handleClipIntelligent(trackIndex, clipLength, patternType) {
+    try {
+        var clipSlot = new LiveAPI("live_set tracks " + trackIndex + " clip_slots 0");
+        var hasClip = clipSlot.get("has_clip");
+        
+        if (hasClip && hasClip[0] === 1) {
+            post("Clip exists in slot 0 - checking for alternative or updating...");
+            
+            // OPTION 1: Leeren Slot finden (Slots 0-7 checken)
+            var emptySlot = findEmptyClipSlot(trackIndex);
+            if (emptySlot !== -1 && emptySlot <= 3) { // Nur erste 4 Slots verwenden
+                post("Using empty slot " + emptySlot + " instead");
+                var newClipSlot = new LiveAPI("live_set tracks " + trackIndex + " clip_slots " + emptySlot);
+                newClipSlot.call("create_clip", clipLength);
+                return new LiveAPI("live_set tracks " + trackIndex + " clip_slots " + emptySlot + " clip");
+            }
+            
+            // OPTION 2: Bestehenden Clip updaten
+            post("No empty slots found - updating existing clip in slot 0");
+            var existingClip = new LiveAPI("live_set tracks " + trackIndex + " clip_slots 0 clip");
+            
+            // Notes intelligent löschen
+            clearClipNotes(existingClip);
+            
+            return existingClip;
+            
+        } else {
+            // OPTION 3: Neuen Clip erstellen
+            post("Creating new clip in empty slot 0");
+            clipSlot.call("create_clip", clipLength);
+            return new LiveAPI("live_set tracks " + trackIndex + " clip_slots 0 clip");
+        }
+        
+    } catch (e) {
+        post("Error handling clip: " + e.message);
+        return null;
+    }
+}
+
+// HILFSFUNKTIONEN
+
+function countClipsInTrack(trackIndex) {
+    var clipCount = 0;
+    try {
+        for (var i = 0; i < 8; i++) { // Check first 8 clip slots
+            var clipSlot = new LiveAPI("live_set tracks " + trackIndex + " clip_slots " + i);
+            var hasClip = clipSlot.get("has_clip");
+            if (hasClip && hasClip[0] === 1) {
+                clipCount++;
+            }
+        }
+    } catch (e) {
+        // Ignore errors
+    }
+    return clipCount;
+}
+
+function isTrackEmpty(trackIndex) {
+    return countClipsInTrack(trackIndex) === 0;
+}
+
+function findEmptyClipSlot(trackIndex) {
+    try {
+        for (var i = 0; i < 8; i++) {
+            var clipSlot = new LiveAPI("live_set tracks " + trackIndex + " clip_slots " + i);
+            var hasClip = clipSlot.get("has_clip");
+            if (!hasClip || hasClip[0] === 0) {
+                return i;
+            }
+        }
+    } catch (e) {
+        post("Error finding empty clip slot: " + e.message);
+    }
+    return -1;
+}
+
+function getTrackCreationTime(trackIndex) {
+    // Approximation: Track-Index als Creation-Time verwenden
+    return trackIndex;
+}
+
+function getPatternVersion(trackIndex) {
+    // Einfache Versionierung basierend auf Clip-Anzahl
+    return countClipsInTrack(trackIndex) + 1;
+}
+
+function clearClipNotes(clip) {
+    try {
+        post("Clearing notes from existing clip...");
+        
+        // Live 12 moderne Methode
+        try {
+            var allNotes = clip.call("get_notes_extended", 0, 0, 0, 128);
+            if (allNotes && allNotes.notes && allNotes.notes.length > 0) {
+                clip.call("remove_notes_extended", {notes: allNotes.notes});
+                post("Cleared " + allNotes.notes.length + " notes (Live 12 API)");
+            }
+        } catch (modernError) {
+            // Fallback zu Legacy
+            clip.call("select_all_notes");
+            clip.call("remove_notes");
+            post("Cleared notes (Legacy API)");
+        }
+        
+    } catch (e) {
+        post("Could not clear clip notes: " + e.message);
+    }
+}
+
+function listAllTracks() {
+    post("=== ALL TRACKS DEBUG ===");
+    try {
+        var liveSet = new LiveAPI("live_set");
+        var trackCount = liveSet.get("tracks").length;
+        
+        for (var i = 0; i < trackCount; i++) {
+            try {
+                var track = new LiveAPI("live_set tracks " + i);
+                if (track.id != 0) {
+                    var name = track.get("name");
+                    var clipCount = countClipsInTrack(i);
+                    post("Track " + i + ": '" + name + "' (Clips: " + clipCount + ")");
+                }
+            } catch (e) {
+                post("Track " + i + ": [error]");
+            }
+        }
+    } catch (e) {
+        post("Could not list tracks: " + e.message);
+    }
+}
+
+// TRACK MEMORY MANAGEMENT
+function updateTrackMemory(trackType, trackIndex) {
+    trackMemory.lastCreatedTracks[trackType] = trackIndex;
+    
+    if (trackMemory.tracksByType[trackType]) {
+        trackMemory.tracksByType[trackType].push(trackIndex);
+    } else {
+        trackMemory.tracksByType[trackType] = [trackIndex];
+    }
+    
+    trackMemory.trackCreationOrder.push(trackIndex);
+    
+    post("Updated track memory: " + trackType + " -> Track " + trackIndex);
+}
+
+// ERSETZE BESTEHENDE FUNKTION
+function createPatternOnTrack(trackName, patternType, clipLength) {
+    createPatternOnTrackSmart(trackName, patternType, clipLength);
+}
 // ALTERNATIVE: Clip explizit ersetzen
 function createPatternOnTrackReplace(trackName, patternType, clipLength) {
     clipLength = clipLength || 4.0;
@@ -237,8 +476,8 @@ function generateKickPattern(clip, clipLength) {
         {time: 3.5, pitch: kickNote, length: noteLength, velocity: velocity - 10}   // Lead-in
     ];
     
-    setNotesCorrectlySimple(clip, noteList);  // Statt setNotesCorrectly()
-    post("Kick pattern generated: 4/4 groove with syncopation");
+    setNotesCorrectly(clip, noteList);
+    post("Kick pattern generated: 4/4 groove with syncopation - FIX ATTEMPT 3");
 }
 
 // KORRIGIERTE BASSLINE PATTERN
@@ -259,7 +498,7 @@ function generateBassLinePattern(clip, clipLength) {
         {time: 3.25, pitch: bassNotes[3], length: 0.25, velocity: velocity - 15}        // G (short)
     ];
     
-    setNotesCorrectlySimple(clip, noteList);  // Statt setNotesCorrectly()
+    setNotesCorrectly(clip, noteList);
     post("Bassline pattern generated: C minor pentatonic groove");
 }
 
@@ -279,7 +518,7 @@ function generateMelodyPattern(clip, clipLength) {
         {time: 3.25, pitch: 65, length: 0.75, velocity: velocity}      // F4
     ];
     
-    setNotesCorrectlySimple(clip, noteList);  // Statt setNotesCorrectly()
+    setNotesCorrectly(clip, noteList);
     post("Melody pattern generated: Catchy C major lead");
 }
 
@@ -313,7 +552,7 @@ function generatePadPattern(clip, clipLength) {
         {time: 3.0, pitch: 50, length: noteLength, velocity: velocity}  // D
     ];
     
-    setNotesCorrectlySimple(clip, noteList);  // Statt setNotesCorrectly()
+    setNotesCorrectly(clip, noteList);
     post("Pad pattern generated: Cm-Ab-Bb-Gm progression");
 }
 
@@ -349,7 +588,7 @@ function generateHiHatPattern(clip, clipLength) {
         });
     }
     
-    setNotesCorrectlySimple(clip, noteList);  // Statt setNotesCorrectly()
+    setNotesCorrectly(clip, noteList);
     post("Hi-hat pattern generated: 16th note groove with accents (" + noteList.length + " notes)");
 }
 // FALLBACK: Basic Pattern
